@@ -1,0 +1,75 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CivicShield – Report road hazards</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--y:#ffc72c;--b:#1d4ed8;--ink:#14213d;--bg:#fffbea;--line:#f3e3a0}
+*{box-sizing:border-box}body{margin:0;font-family:"Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--y);padding:10px 18px;display:flex;justify-content:space-between;align-items:center;border-bottom:4px solid var(--ink)}
+header h1{margin:0;font-size:24px;font-weight:800}header span{font-weight:500;font-size:14px;margin-left:10px}
+main{display:grid;grid-template-columns:410px 1fr;height:calc(100vh - 62px)}
+aside{overflow:auto;padding:14px;background:#fff;border-right:1px solid var(--line)}
+#map{height:100%}
+nav{display:flex;gap:6px;margin-bottom:12px}
+button,select,input,textarea{font:inherit;padding:8px 10px;border-radius:8px;border:2px solid var(--line);width:100%;margin:4px 0;background:#fff}
+button{background:var(--b);color:#fff;border-color:var(--b);font-weight:600;cursor:pointer;width:auto}
+button.alt{background:#fff;color:var(--ink);border-color:var(--ink)}nav button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+:focus-visible{outline:3px solid var(--b);outline-offset:2px}
+.card{border:2px solid var(--line);border-radius:10px;padding:10px;margin:8px 0}
+.bar{display:flex;align-items:center;gap:8px;font-size:14px;margin:3px 0}.bar i{display:block;height:12px;background:var(--b);border-radius:6px}.bar span{width:100px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}
+@media(max-width:800px){main{grid-template-columns:1fr;grid-template-rows:auto 55vh;height:auto}}
+</style></head><body>
+<header><h1>🛡️ CivicShield<span>Spot it. Report it. Get it fixed.</span></h1><div><span id="who"></span> <button class="alt" id="out" hidden onclick="logout()">Log out</button></div></header>
+<main><aside>
+<nav><button id="b-map" onclick="show('map')">Map</button><button id="b-report" onclick="show('report')">Report</button><button id="b-dash" onclick="show('dash')">Dashboard</button><button id="b-login" onclick="show('login')">Log in</button></nav>
+<section id="t-map"><select id="fc" onchange="draw()"><option value="">All hazard types</option></select>
+<select id="fs" onchange="draw()"><option value="">All statuses</option></select><div id="legend"></div></section>
+<section id="t-report" hidden><h3>Report a hazard</h3><p>Click the map to drop a pin, or use your location.</p>
+<button class="alt" onclick="locate()">📍 Use my location</button> <small id="pl"></small>
+<select id="rc"></select><select id="rs"><option value="1">Minor</option><option value="2" selected>Serious</option><option value="3">Dangerous</option></select>
+<input id="rt" placeholder="Short title, e.g. Deep pothole near bus stop"><textarea id="rd" rows="3" placeholder="Details (optional)"></textarea>
+<input id="rp" type="file" accept="image/*"><button onclick="submit(false)">Submit report</button></section>
+<section id="t-dash" hidden><h3>Dashboard</h3><div id="stats"></div><div id="queue"></div></section>
+<section id="t-login" hidden><h3>Log in or sign up</h3><input id="ln" placeholder="Name (sign up only)"><input id="le" type="email" placeholder="Email"><input id="lp" type="password" placeholder="Password (6+ characters)">
+<button onclick="auth(false)">Log in</button> <button class="alt" onclick="auth(true)">Sign up</button></section>
+</aside><div id="map"></div></main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
+const COL={REPORTED:'#ef4444',VERIFIED:'#f59e0b',ASSIGNED:'#8b5cf6',IN_PROGRESS:'#1d4ed8',RESOLVED:'#16a34a',REJECTED:'#9ca3af'};
+const CATS=['Pothole','Broken road edge','Open manhole','Missing signage','Waterlogging','Other'];
+let S=JSON.parse(localStorage.s||'{}'),H=[],pin=null,pm=null,photo=null,tab='map';
+window.onunhandledrejection=e=>alert(e.reason.message);
+const api=async(p,m='GET',b)=>{const r=await fetch('/api'+p,{method:m,headers:{'Content-Type':'application/json','X-Token':S.token||''},body:b?JSON.stringify(b):undefined});
+ const j=await r.json().catch(()=>({}));if(r.status==409)return{dup:j};if(!r.ok)throw new Error(j.message||'Something went wrong');return j};
+const map=L.map('map').setView([20.6,78.9],5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);
+const layer=L.layerGroup().addTo(map);map.on('click',e=>tab=='report'&&setPin(e.latlng.lat,e.latlng.lng));
+navigator.geolocation?.getCurrentPosition(p=>map.setView([p.coords.latitude,p.coords.longitude],13));
+CATS.forEach(c=>{$('#fc').add(new Option(c,c));$('#rc').add(new Option(c,c))});Object.keys(COL).forEach(s=>$('#fs').add(new Option(s,s)));
+$('#legend').innerHTML=Object.entries(COL).map(([k,v])=>`<small><span class=dot style="background:${v}"></span>${k} </small>`).join('');
+function show(t){tab=t;['map','report','dash','login'].forEach(x=>{$('#t-'+x).hidden=x!=t;$('#b-'+x).className=x==t?'on':''});if(t=='dash')dash()}
+function ui(){$('#who').textContent=S.name?S.name+(S.role=='ADMIN'?' (admin)':''):'';$('#out').hidden=!S.token;$('#b-login').hidden=!!S.token}
+function logout(){S={};localStorage.s='{}';ui();show('map')}
+async function auth(reg){S=await api(reg?'/register':'/login','POST',{name:$('#ln').value,email:$('#le').value,password:$('#lp').value});localStorage.s=JSON.stringify(S);ui();show('map')}
+function setPin(a,b){pin={lat:a,lng:b};pm&&map.removeLayer(pm);pm=L.marker([a,b]).addTo(map);$('#pl').textContent=a.toFixed(5)+', '+b.toFixed(5)}
+function locate(){navigator.geolocation.getCurrentPosition(p=>{setPin(p.coords.latitude,p.coords.longitude);map.setView([p.coords.latitude,p.coords.longitude],17)},()=>alert('Location blocked. Click the map instead.'))}
+const shrink=f=>new Promise(r=>{const i=new Image();i.onload=()=>{const k=Math.min(1,640/i.width),c=document.createElement('canvas');c.width=i.width*k;c.height=i.height*k;c.getContext('2d').drawImage(i,0,0,c.width,c.height);r(c.toDataURL('image/jpeg',.6))};i.src=URL.createObjectURL(f)});
+$('#rp').onchange=async e=>{photo=e.target.files[0]?await shrink(e.target.files[0]):null};
+async function submit(force){if(!pin)return alert('Drop a pin on the map first');
+ const r=await api('/hazards'+(force?'?force=true':''),'POST',{category:$('#rc').value,severity:+$('#rs').value,title:$('#rt').value,description:$('#rd').value,lat:pin.lat,lng:pin.lng,photo});
+ if(r.dup){if(confirm('Already reported nearby: "'+r.dup.title+'".\nOK = confirm that report. Cancel = submit yours anyway.'))return conf(r.dup.id);return submit(true)}
+ $('#rt').value=$('#rd').value='';photo=null;$('#rp').value='';alert('Report submitted. Thank you!');await load();show('map')}
+async function conf(id){await api('/hazards/'+id+'/confirm','POST');await load();alert('Thanks, your confirmation raises its priority.')}
+function pop(h){return `<b>${esc(h.title)}</b><br>${esc(h.category)} · ${h.status}<br>${esc(h.description)}<br>${h.photo?`<img src="${h.photo}" width=200>`:''}${h.afterPhoto?`<br>After repair:<br><img src="${h.afterPhoto}" width=200>`:''}<br>${h.confirmations} confirmations · priority ${h.priority}<br><button onclick="conf(${h.id})">I see this too</button>`}
+function draw(){layer.clearLayers();const c=$('#fc').value,s=$('#fs').value;
+ H.filter(h=>(!c||h.category==c)&&(!s||h.status==s)).forEach(h=>L.circleMarker([h.lat,h.lng],{radius:7+h.severity*2,color:'#fff',weight:2,fillColor:COL[h.status],fillOpacity:.95}).addTo(layer).bindPopup(pop(h)))}
+async function load(){H=await api('/hazards');draw()}
+const bars=o=>Object.entries(o).map(([k,v])=>`<div class=bar><span>${esc(k)}</span><i style="width:${Math.min(v*18,180)+8}px"></i>${v}</div>`).join('');
+async function dash(){const a=await api('/analytics');
+ $('#stats').innerHTML=`<div class=card><b>${a.total}</b> reports · avg fix time <b>${a.avgResolveHours.toFixed(1)} h</b> · <b>${a.overdue}</b> open over 7 days</div><b>By type</b>${bars(a.byCategory)}<b>By status</b>${bars(a.byStatus)}`;
+ $('#queue').innerHTML=S.role!='ADMIN'?'<p>Admins see the work queue here.</p>':'<h3>Work queue (highest priority first)</h3>'+[...H].filter(h=>!['RESOLVED','REJECTED'].includes(h.status)).sort((x,y)=>y.priority-x.priority)
+  .map(h=>`<div class=card><b>${esc(h.title)}</b> (priority ${h.priority})<select id=s${h.id}>${Object.keys(COL).map(k=>`<option ${k==h.status?'selected':''}>${k}</option>`).join('')}</select><input type=file id=f${h.id} accept="image/*"><button onclick="upd(${h.id})">Save update</button></div>`).join('')}
+async function upd(id){const f=$('#f'+id).files[0];await api('/hazards/'+id,'PATCH',{status:$('#s'+id).value,afterPhoto:f?await shrink(f):null});await load();dash()}
+ui();show('map');load();
+</script></body></html>
